@@ -84,19 +84,16 @@ def put_file(f, h):
     #s3 = boto3.client('s3')
     s3 = boto3.resource('s3')
 
-    object_path = "tmp/" + f
-    #object_path = "./" + f
+    object_path = "backups/weekly/" + f
 
     bucket = os.environ['ASDB_BUCKET']
 
     # verify bucket exists
     try:
         s3.meta.client.head_bucket(Bucket=bucket)
-        #s3.meta.client.head_bucket(Bucket="dlts-3-karm")
-        print("Bucket exists!", bucket)
-        #s3.upload_file(dumpfile,bucket,object_path)
+        print("Uploading ", f, "to ", bucket)
+        # Add the checksum as metadata
         s3.Object(bucket, object_path).put(Body=open(f, 'rb'), Metadata={'sha256': h})
-        #s3.Object(bucket, object_path).put(body=open(f, 'rb'))
     except botocore.exceptions.ClientError as e:
         error_code = int(e.response['Error']['Code'])
         if error_code == 403:
@@ -106,52 +103,165 @@ def put_file(f, h):
             print("Bucket does not exist!")
 
 
+
+def rm_file(file):
     # delete file
+    # see https://stackoverflow.com/a/10840586/3447107
+    try: 
+        os.remove(file)
+    except OSError as e:
+        pass
 
-    # this gets the file there, now I need to arrange weekly, 
-    # monthly and yearly backups
+def rotate(bucket):
+    # list itmes in the bucket 
+    # get their timestamps
+    # If today is less than 7 move oldest to monthlys
+    #   If today is less than 7 and its January move the oldest to yearly
+    # If there are more than 4 weeklys delete the oldest
+    # If there are more than 12 monthlys delete the oldest
+    # If there are more than 2 yearlys delete the oldest
+    print("rotate: ", bucket)
 
-#def archive_dumps():
-    #   Arrange bucket objects into weekly, monthly and yearly
+    ### Client
+    ##s3 = boto3.client('s3')
+    ##objs = s3.list_objects_v2(Bucket=bucket)['Contents']
+    ##[obj['Key'] for obj in sorted(objs, key=get_last_modified)]
+    #conn = boto3.client('s3')
+    #for key in conn.list_objects(Bucket=bucket, Prefix='tmp/')['Contents']:
+    #    print(key['Key'])
+
+    ### resource
+    s3 = boto3.resource('s3')
+    b = s3.Bucket(bucket)
+    odb = {}
+    #for object in b.objects.all():
+    #for o in b.objects.filter(Prefix="tmp/"):
+    for o in b.objects.filter(Prefix="backups/"):
+        odb[o.key] = o.last_modified
+        
+
+    t = datetime.today().weekday()
+    print("--today: ", t) # the numberical day of the week
+    m = datetime.today().strftime("%m")
+    print("---month: ", m)
+
+    oldest = min(odb, key=odb.get)
+
+    print('----oldest: ', oldest)
+    # take the filename off the object key
+    _, _, oname = oldest.split('/')
+    print('oname: ', oname)
+
+    # move oldest to backups/monthly`
+    ##oldest = min(odb, key=odb.get)
+    print("oldest: ", oldest)
+    #print("move oldest to monthly: ", oldest)
+    #new = b.Object("backups/monthly/" + oldest)
+    #new.copy(   )
+    copy_source = {
+            'Bucket': bucket,
+            'Key': oldest
+            }
+    #_, oname = oldest.split('/')
+    new = b.Object("backups/monthly/" + oname)
+    new.copy(copy_source)
+
+    print("move oldest to yearly: ", oldest)
+    #print("len(odb): ", len(odb))
+    # if month = 01 (03 for testing) move object to monthly
+    if m == '03' and t <= 6:
+        #print("move the oldest daily to the yearly: ", m)
+        copy_source = {
+                'Bucket': bucket,
+                'Key': oldest
+                }
+        new = b.Object("backups/yearly/" + oname)
+        new.copy(copy_source)
+
+
+#    while len(odb) > 7:
+#        # delete oldest 
+#        oldest = min(odb, key=odb.get)
+#        print("---delete oldest: ", oldest)
+#        print("oname: ", oname)
+#        obj = s3.Object(bucket, oldest)
+#        response = obj.delete()
+#        odb.clear()
+#        for o in b.objects.filter(Prefix="backups/"):
+#            odb[o.key] = o.last_modified
+#        print("len(odb): ", len(odb))
+
+def msg(name=None):
+    return '''program.py
+        asdb2s3 has two functions, backing up the databasedump to
+        an s3 bucket, and rotating weekly, monthly and yearly backups.
+        asdbs3 is intended for managing archiveval backups of an RDS
+        database, hence there are no dailies, which are taken care of
+        inside of RDS.
+
+        - To dump the arhcivesspace database,
+
+        `./asdb2s3.py -i <Archivesspace install path> -b <bucket name>
+
+        - Upload an exisitng dumpfile with a checksum
+
+        `./asdb2s3.py -b <bucket name> -f <file name>
+        
+        If no arguments are provided asdb2s3 will dump and rotate
+        the archivesspace database based on environment variables.
+        The available environment vars are as follows,
+
+          ASPACE_INSTALL_DIR
+          ASDB_BUCKET
+
+        '''
 
 def noargs():
     print("Run from environment variables")
 
 def main():
 
-    ap = argparse.ArgumentParser(description="Dump and archive db")
+    ap = argparse.ArgumentParser(description="Dump and backup archivesspace database asdb", usage=msg() )
+    ap.add_argument("-e", "--env", action='store_true', help="run using local environment variables")
     ap.add_argument("-i", "--installdir", nargs=1,
-                    help='Archivesspace installdir')
+                    help='Archivesspace installation directory')
     ap.add_argument("-b", "--bucket", nargs=1,
                     help="S3 bucked to send the dump to")
-    #ap.add_argument("-p", "--put", nargs=1, help="expects bucketname")
-    ap.add_argument("-f", "--file", nargs=1, help="expects filename")
+    ap.add_argument("-f", "--file", nargs=1, help="name of the dump file")
+    ap.add_argument("-r", "--rotate", action='store_true', help="rotate flag")
+    #if len(sys.argv)==1:
+    #        ap.print_help(sys.stderr)
+    #        sys.exit(1)
     args = vars(ap.parse_args())
 
-    #if args["installdir"]:
-#
-#        os.environ['ASPACE_INSTALL_DIR'] = args["installdir"][0]
-#        #print("ASPACE_INSTALL_DIR: " , os.environ['ASPACE_INSTALL_DIR'])
-#                    
-#    if args["bucket"]:
-#        os.environ["ASDB_BUCKET"] = args["bucket"]
-
+    # Dump asdb and upload to <bucket>/backups/weekly/
     if args["installdir"] and args["bucket"]:
         os.environ['ASPACE_INSTALL_DIR'] = args["installdir"][0]
         os.environ["ASDB_BUCKET"] = args["bucket"][0]
         get_db_info()
-        fname = dump_db()  # this works
-        sha256_digest = hash_it(fname)
-        #put_file(dumpfile)
+        f = dump_db()  # this works
+        h = hash_it(f)
+        put_file(f, h)
+        rm_file(f)
+
     if args["bucket"] and args["file"]:
         os.environ["ASDB_BUCKET"] = args["bucket"][0]
-        b = os.environ["ASDB_BUCKET"] 
         f = args["file"][0]
         h = hash_it(f)
         put_file(f, h)
 
+    if args["rotate"] and args["bucket"]:
+        print("starting rotation")
+        os.environ["ASDB_BUCKET"] = args["bucket"][0]
+        b = os.environ["ASDB_BUCKET"] 
+        rotate(b)
 
-
+    if args["env"] and args["installdir"] and args["bucket"]:
+        get_db_info()
+        f = dump_db()  # this works
+        h = hash_it(f)
+        put_file(f, h)
+        rm_file(f)
 
 
 if __name__ == "__main__":
