@@ -114,52 +114,61 @@ def rm_file(file):
 
 #def rotate_key(s3, bucket, period):
 def rotate_key(bucket, period):
-    s3 = boto3.resource('s3')
-    #b = s3.Bucket(bucket)
-    b = bucket
+    if period == "weekly":
+        next = "monthly"
+        total = 5
+    elif period == "monthly":
+        next = "yearly"
+        total = 12
+        
     odb = {}
-    for o in b.objects.filter(Prefix="backups/" + period):
+    for o in bucket.objects.filter(Prefix="backups/" + period):
         odb[o.key] = o.last_modified
         
 
     t = datetime.today().weekday()
-    print("today: ", t) # the numberical day of the week
     m = datetime.today().strftime("%m")
-    print("month: ", m)
-
-    print("type of: ", type(odb))
     oldest = min(odb, key=odb.get)
-    #oldest = min(w, key=o.get)
-    print('oldest: ', oldest)
 
-    # take the filename off the object key
+    ## take the filename off the object key
     _, _, oname = oldest.split('/')
-    print('oname: ', oname)
 
-    print("oldest: ", oldest)
-    print("copy oldest to next higher period: ", oldest)
-    print('b: ', b)
-    print('bucket: ', bucket)
-    print('env bucket: ', os.environ['ASDB_BUCKET'])
+    #print("oldest: ", oldest)
+
+    # copy and delete the oldest dump file
     copy_source = {
             'Bucket': os.environ["ASDB_BUCKET"],
             #'Bucket': "dlts-s3-karms",
             'Key': oldest
             }
-    #_, oname = oldest.split('/')
-    #new = b.Object("backups/" + period + "/" + oname)
-    new = b.Object("backups/monthly/" + oname)
-    print("backups/" + period + "/" + oname)
-    print("new: ", new)
-
-    print("copy course: ", copy_source)
+    k = "backups/" + next + "/" + oname
+    #print("k:      ",k)
+    print("copying ",  oldest, " to monthly")
+    new = bucket.Object(k)
     new.copy(copy_source)
 
-    obj = s3.Object(bucket, oldest)
-### HERE
-    #response = obj.delete()
-    #print("response: ", response)
+    if len(odb) <= total:
+        print("Less than minimum number of " + period + " backups.  Nothing to delete")
+        #return
+    else:
+        print("deleting: ", oldest)
+        response = bucket.Object(oldest).delete()
 
+    # Prune yearly, keep 3
+    ydb = {}
+    for y in bucket.objects.filter(Prefix="backups/yearly"):
+        ydb[y.key] = y.last_modified
+        
+    # Keeping two full years of backups so 3 dump files
+    # to cover the overlap
+    if next == "yearly":
+        while len(ydb) > 3:
+            yoldest = min(ydb, key=ydb.get)
+            _, _, yname = oldest.split('/')
+            response = bucket.Object(yoldest).delete()
+            ydb.clear()
+            for y in bucket.objects.filter(Prefix="backups/yearly/"):
+                ydb[y.key] = y.last_modified
 
 
 def rotate(bucket):
@@ -176,49 +185,22 @@ def rotate(bucket):
     s3 = boto3.resource('s3')
     b = s3.Bucket(bucket)
 
-
-
     t = datetime.today().weekday()
-    print("today: ", t) # the numberical day of the week
+    #print("today: ", t) # the numberical day of the week
     m = datetime.today().strftime("%m")
-    print("month: ", m)
+    #print("month: ", m)
 
-
-    print("t: ", t)
-    if t == 0:
+    #if t == 0:
+    if t == 1:
         print("Rotate weekly")
         rotate_key(b, "weekly")
-#
-#
-### end weekly
-    # rotate all objects in the weekly folder
-    #rotate_key(s3, b, "weekly")
 
-#    print("------copy oldest to yearly: ", oldest)
-#    #print("len(odb): ", len(odb))
-#    # if month = 01 (03 for testing) move object to monthly
-#    if m == '03' and t <= 6:
-#        #print("move the oldest daily to the yearly: ", m)
-#        copy_source = {
-#                'Bucket': bucket,
-#                'Key': oldest
-#                }
-#        new = b.Object("backups/yearly/" + oname)
-#        new.copy(copy_source)
-#
+    ##if t == 0 and m == "01":
+    if t == 1 and m == "03":
+        print("Rotate monthly")
+        rotate_key(b, "monthly")
 
-    # Prune
-#    while len(odb) > 7:
-#        # delete oldest 
-#        oldest = min(odb, key=odb.get)
-#        print("---delete oldest: ", oldest)
-#        print("oname: ", oname)
-#        obj = s3.Object(bucket, oldest)
-#        response = obj.delete()
-#        odb.clear()
-#        for o in b.objects.filter(Prefix="backups/"):
-#            odb[o.key] = o.last_modified
-#        print("len(odb): ", len(odb))
+
 
 def msg(name=None):
     return '''program.py
@@ -283,6 +265,7 @@ def main():
         print("starting rotation")
         os.environ["ASDB_BUCKET"] = args["bucket"][0]
         bucket = os.environ["ASDB_BUCKET"] 
+        print("rotate_bucket: main")
         rotate(bucket)
 
     if args["env"] and args["installdir"] and args["bucket"]:
