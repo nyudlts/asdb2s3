@@ -102,6 +102,24 @@ def put_file(f, h):
         if error_code == 404:
             print("Bucket does not exist!")
 
+    if "ASDB_SECONDARY_BUCKET" in os.environ:
+        secondary_path = "asdb/" + f
+
+        secondary_bucket = os.environ['ASDB_SECONDARY_BUCKET']
+
+        # verify bucket exists
+        try:
+            s3.meta.client.head_bucket(Bucket=secondary_bucket)
+            print("Uploading ", f, "to ", secondary_bucket)
+            # Add the checksum as metadata
+            s3.Object(secondary_bucket, secondary_path).put(Body=open(f, 'rb'), Metadata={'sha256': h})
+        except botocore.exceptions.ClientError as e:
+            error_code = int(e.response['Error']['Code'])
+            if error_code == 403:
+                print("Private bucket. Forbidden!")
+                return True
+            if error_code == 404:
+                print("Secondary Bucket does not exist!")
 
 
 def rm_file(file):
@@ -224,6 +242,7 @@ def msg(name=None):
 
           ASPACE_INSTALL_DIR
           ASDB_BUCKET
+          ASDB_SECONDARY_BUCKET
 
         '''
 
@@ -249,6 +268,7 @@ def main():
     if args["installdir"] and args["bucket"]:
         os.environ['ASPACE_INSTALL_DIR'] = args["installdir"][0]
         os.environ["ASDB_BUCKET"] = args["bucket"][0]
+        os.environ["ASDB_SECONDARY_BUCKET"] = "dlts-s3-karms"
         get_db_info()
         f = dump_db()  # this works
         h = hash_it(f)
