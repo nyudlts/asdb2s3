@@ -81,10 +81,10 @@ def hash_it(file):
 
     
 def put_file(f, h):
-    #s3 = boto3.client('s3')
     s3 = boto3.resource('s3')
 
-    object_path = "backups/weekly/" + f
+    object_prefix = os.environ['ASDB_OBJ_PREFIX']
+    object_path = object_prefix + "/weekly/" + f
 
     bucket = os.environ['ASDB_BUCKET']
 
@@ -140,7 +140,7 @@ def rotate_key(bucket, period):
         total = 12
         
     odb = {}
-    for o in bucket.objects.filter(Prefix="backups/" + period):
+    for o in bucket.objects.filter(Prefix=object_prefix + "/"  + period):
         odb[o.key] = o.last_modified
         
 
@@ -159,7 +159,7 @@ def rotate_key(bucket, period):
             #'Bucket': "dlts-s3-karms",
             'Key': oldest
             }
-    k = "backups/" + next + "/" + oname
+    k = object_prefix + "/" + next + "/" + oname
     #print("k:      ",k)
     print("copying ",  oldest, " to monthly")
     new = bucket.Object(k)
@@ -174,7 +174,7 @@ def rotate_key(bucket, period):
 
     # Prune yearly, keep 3
     ydb = {}
-    for y in bucket.objects.filter(Prefix="backups/yearly"):
+    for y in bucket.objects.filter(Prefix=object_prefix + "/yearly"):
         ydb[y.key] = y.last_modified
         
     # Keeping two full years of backups so 3 dump files
@@ -185,7 +185,7 @@ def rotate_key(bucket, period):
             _, _, yname = oldest.split('/')
             response = bucket.Object(yoldest).delete()
             ydb.clear()
-            for y in bucket.objects.filter(Prefix="backups/yearly/"):
+            for y in bucket.objects.filter(Prefix=object_prefix + "/yearly/"):
                 ydb[y.key] = y.last_modified
 
 
@@ -264,8 +264,10 @@ def main():
     #        sys.exit(1)
     args = vars(ap.parse_args())
 
+
     # Dump asdb and upload to <bucket>/backups/weekly/
     if args["installdir"] and args["bucket"]:
+        os.environ['ASDB_OBJ_PREFIX'] = "archivesspace/backups"
         os.environ['ASPACE_INSTALL_DIR'] = args["installdir"][0]
         os.environ["ASDB_BUCKET"] = args["bucket"][0]
         os.environ["ASDB_SECONDARY_BUCKET"] = "dlts-s3-karms"
@@ -275,13 +277,16 @@ def main():
         put_file(f, h)
         rm_file(f)
 
+    # hash and upload file
     if args["bucket"] and args["file"]:
         os.environ["ASDB_BUCKET"] = args["bucket"][0]
         f = args["file"][0]
         h = hash_it(f)
         put_file(f, h)
 
+    # Rotate backups
     if args["rotate"] and args["bucket"]:
+        os.environ['ASDB_OBJ_PREFIX'] = "archivesspace/backups"
         print("starting rotation")
         os.environ["ASDB_BUCKET"] = args["bucket"][0]
         bucket = os.environ["ASDB_BUCKET"] 
