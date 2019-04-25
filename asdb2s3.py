@@ -4,11 +4,13 @@ import argparse
 import boto3
 import botocore
 import hashlib
+import json
 import os
 import re
 import subprocess
 from subprocess import Popen, PIPE
 import sys
+import urllib.request
 #import time
 
 from datetime import datetime
@@ -246,6 +248,30 @@ def msg(name=None):
 
         '''
 
+def findval(v, k):
+    if type(v) == type({}):
+        for k1 in v:
+            if k1 == k:
+                #print(v[k1])
+                return v[k1]
+
+            findall(v[k1], k)
+
+def getidoc():
+    with urllib.request.urlopen('http://169.254.169.254/latest/dynamic/instance-identity/document/') as response:
+        r = response.read()
+    return r
+
+def gettags(iid):
+    ec2 = boto3.resource('ec2',region_name='us-east-1')
+    ec2instance =ec2.Instance(iid)
+    instancename = ''
+    for tags in ec2instance.tags:
+        if tags["Key"] == 'Environment':
+            env = tags["Value"]
+    return env
+
+
 def noargs():
     print("Run from environment variables")
 
@@ -259,6 +285,8 @@ def main():
                     help="S3 bucked to send the dump to")
     ap.add_argument("-f", "--file", nargs=1, help="name of the dump file")
     ap.add_argument("-r", "--rotate", action='store_true', help="rotate flag")
+    ap.add_argument("-t", "--test", action='store_true', help="test")
+
     #if len(sys.argv)==1:
     #        ap.print_help(sys.stderr)
     #        sys.exit(1)
@@ -299,6 +327,13 @@ def main():
         h = hash_it(f)
         put_file(f, h)
         rm_file(f)
+
+    if args["test"]:
+        d = getidoc()
+        iid = findall(json.loads(d), 'instanceId')
+        print(iid)
+        env = gettags(iid)
+        print(iid, " is running in ", env)
 
 
 if __name__ == "__main__":
