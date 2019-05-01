@@ -1,14 +1,16 @@
-#!/usr/bin/env python36
+#!/usr/bin/env python3
 
 import argparse
 import boto3
 import botocore
 import hashlib
+import json
 import os
 import re
 import subprocess
 from subprocess import Popen, PIPE
 import sys
+import urllib.request
 #import time
 
 from datetime import datetime
@@ -48,7 +50,7 @@ def dump_db():
     now = datetime.now().strftime("%Y%m%d-%H%M%S")
 
     dumpfile = now + "-" + os.environ['ASDBNAME'] + ".sql.gz"
-    opath = "./" + dumpfile 
+    opath = "./" + dumpfile
 
     out = open(opath, 'w+')
 
@@ -76,10 +78,10 @@ def hash_it(file):
 
     #print("SHA256: {0}".format(s.hexdigest()))
     d = format(s.hexdigest())
-     
+
     return d
 
-    
+
 def put_file(f, h):
     s3 = boto3.resource('s3')
 
@@ -125,64 +127,67 @@ def put_file(f, h):
 def rm_file(file):
     # delete file
     # see https://stackoverflow.com/a/10840586/3447107
-    try: 
+    try:
         os.remove(file)
     except OSError as e:
         pass
 
 #def rotate_key(s3, bucket, period):
-def rotate_key(bucket, period):
+def rotate_key(bucket, period, object_prefix):
     if period == "weekly":
         next = "monthly"
         total = 5
     elif period == "monthly":
         next = "yearly"
         total = 12
-        
-    odb = {}
-    for o in bucket.objects.filter(Prefix=object_prefix + "/"  + period):
-        odb[o.key] = o.last_modified
-        
 
     t = datetime.today().weekday()
     m = datetime.today().strftime("%m")
-    oldest = min(odb, key=odb.get)
+    d = datetime.today().strftime("%d")
 
-    ## take the filename off the object key
-    _, _, oname = oldest.split('/')
+    if next == "monthly":
+        odb = {}
+        for o in bucket.objects.filter(Prefix=object_prefix + "/"  + period):
+            odb[o.key] = o.last_modified
 
-    #print("oldest: ", oldest)
+        oldest = min(odb, key=odb.get)
 
-    # copy and delete the oldest dump file
-    copy_source = {
-            'Bucket': os.environ["ASDB_BUCKET"],
-            #'Bucket': "dlts-s3-karms",
-            'Key': oldest
-            }
-    k = object_prefix + "/" + next + "/" + oname
-    #print("k:      ",k)
-    print("copying ",  oldest, " to monthly")
-    new = bucket.Object(k)
-    new.copy(copy_source)
+        print("m: ", m)
+        print("d: ", d)
+        print("oldest: ", oldest)
+        ## take the filename off the object key
+        _, _, _, oname = oldest.split('/')
 
-    if len(odb) <= total:
-        print("Less than minimum number of " + period + " backups.  Nothing to delete")
-        #return
-    else:
-        print("deleting: ", oldest)
-        response = bucket.Object(oldest).delete()
+        # copy and delete the oldest dump file
+        copy_source = {
+                'Bucket': os.environ["ASDB_BUCKET"],
+                #'Bucket': "dlts-s3-karms",
+                'Key': oldest
+                }
+        k = object_prefix + "/" + next + "/" + oname
+        #print("k:      ",k)
+        print("copying ",  oldest, " to monthly")
+        new = bucket.Object(k)
+        new.copy(copy_source)
 
-    # Prune yearly, keep 3
-    ydb = {}
-    for y in bucket.objects.filter(Prefix=object_prefix + "/yearly"):
-        ydb[y.key] = y.last_modified
-        
+        if len(odb) <= total:
+            print("Less than minimum number of " + period + " backups.  Nothing to delete")
+            #return
+        else:
+            print("deleting: ", oldest)
+            response = bucket.Object(oldest).delete()
+
     # Keeping two full years of backups so 3 dump files
     # to cover the overlap
     if next == "yearly":
+        # Prune yearly, keep 3
+        ydb = {}
+        for y in bucket.objects.filter(Prefix=object_prefix + "/yearly"):
+            ydb[y.key] = y.last_modified
+
         while len(ydb) > 3:
             yoldest = min(ydb, key=ydb.get)
-            _, _, yname = oldest.split('/')
+            _, _, _, yname = oldest.split('/')
             response = bucket.Object(yoldest).delete()
             ydb.clear()
             for y in bucket.objects.filter(Prefix=object_prefix + "/yearly/"):
@@ -190,7 +195,7 @@ def rotate_key(bucket, period):
 
 
 def rotate(bucket):
-    # list itmes in the bucket 
+    # list items in the bucket
     # get their timestamps
     # If today is less than 7 move oldest to monthlys
     #   If today is less than 7 and its January move the oldest to yearly
@@ -198,6 +203,9 @@ def rotate(bucket):
     # If there are more than 12 monthlys delete the oldest
     # If there are more than 2 yearlys delete the oldest
     print("rotate: ", bucket)
+    #print(os.environ['ASDB_OBJ_PREFIX'])
+    object_prefix = os.environ['ASDB_OBJ_PREFIX']
+
 
     ### resource
     s3 = boto3.resource('s3')
@@ -209,14 +217,16 @@ def rotate(bucket):
     #print("month: ", m)
 
     #if t == 0:
-    if t == 1:
+    if t == 6:
         print("Rotate weekly")
-        rotate_key(b, "weekly")
+        rotate_key(b, "weekly", object_prefix)
+        #print(object_prefix)
 
     ##if t == 0 and m == "01":
-    if t == 1 and m == "03":
+    if t == 1 and m == "04":
         print("Rotate monthly")
-        rotate_key(b, "monthly")
+        rotate_key(b, "monthly", object_prefix)
+        #print(object_prefix)
 
 
 
@@ -235,7 +245,7 @@ def msg(name=None):
         - Upload an exisitng dumpfile with a checksum
 
         `./asdb2s3.py -b <bucket name> -f <file name>
-        
+
         If no arguments are provided asdb2s3 will dump and rotate
         the archivesspace database based on environment variables.
         The available environment vars are as follows,
@@ -245,6 +255,30 @@ def msg(name=None):
           ASDB_SECONDARY_BUCKET
 
         '''
+
+def findval(v, k):
+    if type(v) == type({}):
+        for k1 in v:
+            if k1 == k:
+                #print(v[k1])
+                return v[k1]
+
+            findval(v[k1], k)
+
+def getidoc():
+    with urllib.request.urlopen('http://169.254.169.254/latest/dynamic/instance-identity/document/') as response:
+        r = response.read()
+    return r
+
+def gettags(iid):
+    ec2 = boto3.resource('ec2',region_name='us-east-1')
+    ec2instance =ec2.Instance(iid)
+    instancename = ''
+    for tags in ec2instance.tags:
+        if tags["Key"] == 'Environment':
+            env = tags["Value"]
+    return env
+
 
 def noargs():
     print("Run from environment variables")
@@ -259,46 +293,64 @@ def main():
                     help="S3 bucked to send the dump to")
     ap.add_argument("-f", "--file", nargs=1, help="name of the dump file")
     ap.add_argument("-r", "--rotate", action='store_true', help="rotate flag")
+    ap.add_argument("-t", "--test", action='store_true', help="test")
+
     #if len(sys.argv)==1:
     #        ap.print_help(sys.stderr)
     #        sys.exit(1)
     args = vars(ap.parse_args())
 
 
-    # Dump asdb and upload to <bucket>/backups/weekly/
-    if args["installdir"] and args["bucket"]:
-        os.environ['ASDB_OBJ_PREFIX'] = "archivesspace/backups"
-        os.environ['ASPACE_INSTALL_DIR'] = args["installdir"][0]
-        os.environ["ASDB_BUCKET"] = args["bucket"][0]
-        os.environ["ASDB_SECONDARY_BUCKET"] = "dlts-s3-karms"
-        get_db_info()
-        f = dump_db()  # this works
-        h = hash_it(f)
-        put_file(f, h)
-        rm_file(f)
+    d = getidoc()
+    iid = findval(json.loads(d), 'instanceId')
+    env = gettags(iid)
 
-    # hash and upload file
-    if args["bucket"] and args["file"]:
-        os.environ["ASDB_BUCKET"] = args["bucket"][0]
-        f = args["file"][0]
-        h = hash_it(f)
-        put_file(f, h)
+    if env == "production":
+        # Dump asdb and upload to <bucket>/backups/weekly/
+        if args["installdir"] and args["bucket"]:
+            os.environ['ASDB_OBJ_PREFIX'] = "archivesspace/backups"
+            os.environ['ASPACE_INSTALL_DIR'] = args["installdir"][0]
+            os.environ["ASDB_BUCKET"] = args["bucket"][0]
+            os.environ["ASDB_SECONDARY_BUCKET"] = "dlts-s3-karms"
+            get_db_info()
+            f = dump_db()  # this works
+            h = hash_it(f)
+            put_file(f, h)
+            rm_file(f)
 
-    # Rotate backups
-    if args["rotate"] and args["bucket"]:
-        os.environ['ASDB_OBJ_PREFIX'] = "archivesspace/backups"
-        print("starting rotation")
-        os.environ["ASDB_BUCKET"] = args["bucket"][0]
-        bucket = os.environ["ASDB_BUCKET"] 
-        print("rotate_bucket: main")
-        rotate(bucket)
+        # hash and upload file
+        if args["bucket"] and args["file"]:
+            os.environ["ASDB_BUCKET"] = args["bucket"][0]
+            f = args["file"][0]
+            h = hash_it(f)
+            put_file(f, h)
 
-    if args["env"] and args["installdir"] and args["bucket"]:
-        get_db_info()
-        f = dump_db()  # this works
-        h = hash_it(f)
-        put_file(f, h)
-        rm_file(f)
+        # Rotate backups
+        if args["rotate"] and args["bucket"]:
+            os.environ['ASDB_OBJ_PREFIX'] = "archivesspace/backups"
+            print(os.environ['ASDB_OBJ_PREFIX'])
+            print("starting rotation")
+            os.environ["ASDB_BUCKET"] = args["bucket"][0]
+            bucket = os.environ["ASDB_BUCKET"]
+            print("rotate_bucket: main")
+            rotate(bucket)
+
+        if args["env"] and args["installdir"] and args["bucket"]:
+            get_db_info()
+            f = dump_db()  # this works
+            h = hash_it(f)
+            put_file(f, h)
+            rm_file(f)
+    else:
+        print("Backups only run in production")
+
+    # Test will run in all environments
+    if args["test"]:
+        #d = getidoc()
+        #iid = findval(json.loads(d), 'instanceId')
+        #print(iid)
+        #env = gettags(iid)
+        print(iid, " is running in ", env)
 
 
 if __name__ == "__main__":
