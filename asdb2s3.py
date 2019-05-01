@@ -341,6 +341,8 @@ def main():
             h = hash_it(f)
             put_file(f, h)
             rm_file(f)
+    else:
+        print("Backups only run in production")
 
     # Test will run in all environments
     if args["test"]:
