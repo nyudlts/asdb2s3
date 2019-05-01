@@ -263,7 +263,7 @@ def findval(v, k):
                 #print(v[k1])
                 return v[k1]
 
-            findall(v[k1], k)
+            findval(v[k1], k)
 
 def getidoc():
     with urllib.request.urlopen('http://169.254.169.254/latest/dynamic/instance-identity/document/') as response:
@@ -301,47 +301,53 @@ def main():
     args = vars(ap.parse_args())
 
 
-    # Dump asdb and upload to <bucket>/backups/weekly/
-    if args["installdir"] and args["bucket"]:
-        os.environ['ASDB_OBJ_PREFIX'] = "archivesspace/backups"
-        os.environ['ASPACE_INSTALL_DIR'] = args["installdir"][0]
-        os.environ["ASDB_BUCKET"] = args["bucket"][0]
-        os.environ["ASDB_SECONDARY_BUCKET"] = "dlts-s3-karms"
-        get_db_info()
-        f = dump_db()  # this works
-        h = hash_it(f)
-        put_file(f, h)
-        rm_file(f)
+    d = getidoc()
+    iid = findval(json.loads(d), 'instanceId')
+    env = gettags(iid)
 
-    # hash and upload file
-    if args["bucket"] and args["file"]:
-        os.environ["ASDB_BUCKET"] = args["bucket"][0]
-        f = args["file"][0]
-        h = hash_it(f)
-        put_file(f, h)
+    if env == "production":
+        # Dump asdb and upload to <bucket>/backups/weekly/
+        if args["installdir"] and args["bucket"]:
+            os.environ['ASDB_OBJ_PREFIX'] = "archivesspace/backups"
+            os.environ['ASPACE_INSTALL_DIR'] = args["installdir"][0]
+            os.environ["ASDB_BUCKET"] = args["bucket"][0]
+            os.environ["ASDB_SECONDARY_BUCKET"] = "dlts-s3-karms"
+            get_db_info()
+            f = dump_db()  # this works
+            h = hash_it(f)
+            put_file(f, h)
+            rm_file(f)
 
-    # Rotate backups
-    if args["rotate"] and args["bucket"]:
-        os.environ['ASDB_OBJ_PREFIX'] = "archivesspace/backups"
-        print(os.environ['ASDB_OBJ_PREFIX'])
-        print("starting rotation")
-        os.environ["ASDB_BUCKET"] = args["bucket"][0]
-        bucket = os.environ["ASDB_BUCKET"]
-        print("rotate_bucket: main")
-        rotate(bucket)
+        # hash and upload file
+        if args["bucket"] and args["file"]:
+            os.environ["ASDB_BUCKET"] = args["bucket"][0]
+            f = args["file"][0]
+            h = hash_it(f)
+            put_file(f, h)
 
-    if args["env"] and args["installdir"] and args["bucket"]:
-        get_db_info()
-        f = dump_db()  # this works
-        h = hash_it(f)
-        put_file(f, h)
-        rm_file(f)
+        # Rotate backups
+        if args["rotate"] and args["bucket"]:
+            os.environ['ASDB_OBJ_PREFIX'] = "archivesspace/backups"
+            print(os.environ['ASDB_OBJ_PREFIX'])
+            print("starting rotation")
+            os.environ["ASDB_BUCKET"] = args["bucket"][0]
+            bucket = os.environ["ASDB_BUCKET"]
+            print("rotate_bucket: main")
+            rotate(bucket)
 
+        if args["env"] and args["installdir"] and args["bucket"]:
+            get_db_info()
+            f = dump_db()  # this works
+            h = hash_it(f)
+            put_file(f, h)
+            rm_file(f)
+
+    # Test will run in all environments
     if args["test"]:
-        d = getidoc()
-        iid = findall(json.loads(d), 'instanceId')
-        print(iid)
-        env = gettags(iid)
+        #d = getidoc()
+        #iid = findval(json.loads(d), 'instanceId')
+        #print(iid)
+        #env = gettags(iid)
         print(iid, " is running in ", env)
 
 
